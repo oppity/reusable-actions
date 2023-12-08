@@ -1,0 +1,70 @@
+name: Plan Infra & Comment
+
+on:
+  workflow_call:
+    inputs:
+      artifact_file:
+        required: true
+        type: string
+      aws_role:
+        type: string
+      env:
+        type: string
+        description: Deployment environment
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read # This is required for actions/checkout
+  pull-requests: write
+
+jobs:
+  plan-infra:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v3
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: ${{inputs.aws_role}}
+          role-session-name: GithubActions
+          aws-region: us-west-2
+      - name: Retrieve Dev Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{inputs.artifact_file}}
+      - name: Terraform Init
+        id: init
+        run: terraform init
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=../plan.tf
+        continue-on-error: true
+        env:
+          TF_VAR_ENV: ${{inputs.env}}
+          TF_VAR_VERSION: '1000'
+      - name: Save TF Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: '${{github.head_ref}}-dev-plan-tf'
+          path: plan.tf
+          retention-days: 1
+
+      - name: Comment PR with plan
+        if: github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          message: |
+            Terraform plan:
+            ```
+            ${{steps.plan.outputs.stdout}}
+            ```
+          comment_tag: plan
+          mode: recreate
